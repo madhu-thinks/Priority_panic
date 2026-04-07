@@ -14,9 +14,17 @@ tags:
 
 # Priority Panic Environment
 
-An RL environment where an AI agent learns to prioritize tasks under pressure — deadlines, dependencies, limited energy, and people waiting. Three difficulty levels from simple ordering to complex multi-constraint planning.
+> Inspired by a real situation: two students, four days, no prior experience, and a decision to build anyway.
+> Every task in this environment is something we personally faced while building it.
+> The agent that learns to handle this learns what we had to learn the hard way.
 
-Inspired by a real situation: a student with 4 days, no prior experience, a deadline, and the decision to build anyway.
+An RL environment where an AI agent learns to prioritize tasks under pressure—
+deadlines, dependencies, limited energy, and people waiting.
+
+Three difficulty levels: from simple task ordering to complex, multi-constraint planning.
+
+This isn’t a toy problem. Every human alive has lived this.
+Now AI can learn it too.
 
 ## Quick Start
 
