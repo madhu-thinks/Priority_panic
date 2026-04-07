@@ -2,16 +2,21 @@ import asyncio
 import json
 import os
 import textwrap
+from dotenv import load_dotenv
 from typing import Dict, List
 from openai import OpenAI
 from priority_panic import PriorityPanicAction, PriorityPanicEnv
 
 # --- Configuration --- #
-MODEL_NAME = "meta-llama/Llama-3.1-70B-Instruct" 
-API_KEY = os.getenv("API_KEY") or os.getenv("HF_TOKEN")
-API_BASE_URL = os.getenv("API_BASE_URL") or "https://api.sambanova.ai/v1"
-HF_SPACE_URL = os.getenv("HF_SPACE_URL")
-
+MODEL_NAME = "Qwen2.5-7B-Instruct"
+API_KEY = os.getenv("HF_TOKEN")
+API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
+HF_SPACE_URL = os.getenv("HF_SPACE_URL") or "https://your-username-priority-panic.hf.space"
+# --- DEBUG PRINT (Add this temporarily to see what's happening) ---
+if not API_KEY:
+    print("[DEBUG] HF_TOKEN is missing from .env or .env is not found!")
+if not HF_SPACE_URL:
+    print("[DEBUG] HF_SPACE_URL is missing from .env!")
 # --- Optimized System Prompt --- #
 SYSTEM_PROMPT = textwrap.dedent("""
     You are an Elite Efficiency AI. Your performance is graded on 'Value per Energy' (VPE).
