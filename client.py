@@ -29,10 +29,11 @@ class PriorityPanicEnv(
         >>> # Connect to a running server
         >>> with PriorityPanicEnv(base_url="http://localhost:8000") as client:
         ...     result = client.reset()
-        ...     print(result.observation.echoed_message)
+        ...     print(result.observation.tasks)
         ...
-        ...     result = client.step(PriorityPanicAction(message="Hello!"))
-        ...     print(result.observation.echoed_message)
+        ...     from priority_panic import PriorityPanicAction
+        ...     result = client.step(PriorityPanicAction(ordered_task_ids=["T1", "T2"]))
+        ...     print(result.reward)
 
     Example with Docker:
         >>> # Automatically start container and connect
@@ -55,7 +56,10 @@ class PriorityPanicEnv(
             Dictionary representation suitable for JSON encoding
         """
         return {
-            "message": action.message,
+            "ordered_task_ids": action.ordered_task_ids,
+            "dropped_task_ids": action.dropped_task_ids,
+            "message_to_waiting_person": action.message_to_waiting_person,
+            "reasoning": action.reasoning,
         }
 
     def _parse_result(self, payload: Dict) -> StepResult[PriorityPanicObservation]:
@@ -70,11 +74,12 @@ class PriorityPanicEnv(
         """
         obs_data = payload.get("observation", {})
         observation = PriorityPanicObservation(
-            echoed_message=obs_data.get("echoed_message", ""),
-            message_length=obs_data.get("message_length", 0),
+            tasks=obs_data.get("tasks", []),
+            available_energy=obs_data.get("available_energy", 5),
+            waiting_person=obs_data.get("waiting_person", ""),
+            level=obs_data.get("level", "easy"),
             done=payload.get("done", False),
             reward=payload.get("reward"),
-            metadata=obs_data.get("metadata", {}),
         )
 
         return StepResult(

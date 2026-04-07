@@ -29,10 +29,10 @@ API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
 MODEL_NAME = os.getenv("MODEL_NAME") or "Qwen/Qwen2.5-72B-Instruct"
 BENCHMARK = "priority_panic"
-MAX_STEPS = 3
+MAX_STEPS = 15
 TEMPERATURE = 0.7
-MAX_TOKENS = 300
-SUCCESS_SCORE_THRESHOLD = 0.5
+MAX_TOKENS = 512
+SUCCESS_SCORE_THRESHOLD = 5.0  # arbitrary threshold for average rewards
 
 
 def validate_config() -> bool:
@@ -58,20 +58,26 @@ def validate_config() -> bool:
     return True
 
 SYSTEM_PROMPT = textwrap.dedent("""
-    You are a task prioritization agent.
-    You will receive a list of tasks, each with an id, name, deadline, priority, energy cost, and dependencies.
-    You must decide:
-    1. ordered_task_ids: list of task IDs in the order you will do them
-    2. dropped_task_ids: list of task IDs you are dropping (if energy is limited)
-    3. message_to_waiting_person: a message to anyone waiting for your response (if applicable)
-    4. reasoning: brief explanation of your decisions
+    You are an expert task prioritization agent operating in a MULTI-STEP environment.
+    Each step, you receive a list of current tasks, their ages, and a bandwidth (energy) budget.
+    Your goal is to maximize your cumulative reward over the episode.
 
-    Respond ONLY in this exact JSON format, nothing else:
+    STRICT RULES:
+    1. ENERGY BUDGET (PER STEP): The sum of energy costs for ordered_task_ids must NOT exceed available_energy for THIS step.
+       Tasks that you execute will be binary completed and removed.
+    2. DEPENDENCIES: If task B depends_on task A, A must be completed BEFORE B.
+    3. THE PANIC MECHANIC (AGE PENALTY): The "age" of a task increases every step it is not completed.
+       Uncompleted High & Medium priority tasks incur an exponentially growing penalty based on their age every single step. Complete them FAST!
+    4. PERMANENT DROPPING: Tasks placed in dropped_task_ids are PERMANENTLY deleted. Be very careful dropping High tasks.
+    5. COMMUNICATION: If there is a waiting_person, you MUST write a meaningful message (at least 10 words) explaining the delay.
+    6. PERSISTENCE: Tasks you don't complete or drop today WILL persist to the next step. Only use ordered_task_ids for what you can actually finish TODAY given your energy bandwidth.
+
+    Respond ONLY in this exact JSON format, no extra text:
     {
         "ordered_task_ids": ["T1", "T3"],
-        "dropped_task_ids": ["T4"],
-        "message_to_waiting_person": "I will get back to you by tonight.",
-        "reasoning": "Handled urgent tasks first."
+        "dropped_task_ids": ["T7"],
+        "message_to_waiting_person": "Hi mentor, working on the hackathon project.",
+        "reasoning": "Executed high priority tasks to prevent age panic. Carried over remaining tasks to next step."
     }
 """).strip()
 
@@ -116,14 +122,53 @@ def get_model_action(client: OpenAI, observation: Dict) -> Dict:
         Parsed action dict with keys: ordered_task_ids, dropped_task_ids,
         message_to_waiting_person, reasoning
     """
-    user_prompt = textwrap.dedent(f"""
-        Current level: {observation.get('level')}
-        Available energy: {observation.get('available_energy')}
-        Waiting person: {observation.get('waiting_person') or 'None'}
-        Tasks:
-        {observation.get('tasks')}
+    level = observation.get('level', 'easy')
+    energy = observation.get('available_energy', 5)
+    waiting = observation.get('waiting_person') or 'None'
+    tasks = observation.get('tasks', [])
 
-        Make your prioritization decision now.
+    # Build a clean task listing for the prompt
+    task_lines = []
+    total_energy_all = 0
+    for t in tasks:
+        tid = t.get('id', 'unknown')
+        name = t.get('name', 'Unnamed task')
+        deadline = t.get('deadline', 'none')
+        priority = t.get('priority', 'medium')
+        energy_cost = t.get('energy', 0)
+        age = t.get('age', 0)
+        dep_id = t.get('depends_on', '')
+        
+        dep = f" | depends_on: {dep_id}" if dep_id else ""
+        task_lines.append(
+            f"  {tid}: {name} | deadline: {deadline} | priority: {priority} | energy: {energy_cost} | age: {age}{dep}"
+        )
+        total_energy_all += energy_cost
+
+    task_str = "\n".join(task_lines)
+    energy_warning = "WARNING: Total energy of all tasks exceeds budget. You MUST drop some tasks." if total_energy_all > energy else "Energy is sufficient if you are selective."
+
+    user_prompt = textwrap.dedent(f"""
+        STEP: {observation.get('current_step', 1)} / {observation.get('max_steps', 15)}
+        LEVEL: {level}
+        ENERGY BUDGET: {energy} (do not exceed this with your ordered tasks)
+        {energy_warning}
+
+        TASKS:
+{task_str}
+
+        WAITING PERSON: {waiting}
+
+        Your job:
+        - ordered_task_ids: task IDs you will DO, in correct priority/dependency order
+        - dropped_task_ids: task IDs you are deliberately skipping (low priority / energy overflow)
+        - message_to_waiting_person: REQUIRED if waiting person is not None (min 25 words)
+        - reasoning: explain your choices
+
+        Remember: energy sum of ordered tasks must be <= {energy}.
+        Remember: if task X has depends_on=Y, Y must come before X in ordered_task_ids.
+
+        Respond in JSON only.
     """).strip()
 
     try:
@@ -173,22 +218,33 @@ async def run_level(client: OpenAI, env, level: str) -> float:
     steps_taken = 0
     score = 0.0
     success = False
+    
+    # Latency tracking
+    task_spawn_steps = {} # tid -> step_count
+    latencies = []
 
     log_start(task=level, env=BENCHMARK, model=MODEL_NAME)
 
     try:
-        result = await env.reset()
+        result = await env.reset(level=level)
         obs = result.observation
 
         for step in range(1, MAX_STEPS + 1):
             if result.done:
                 break
+            
+            # Track spawns
+            for t in obs.tasks:
+                if t['id'] not in task_spawn_steps:
+                    task_spawn_steps[t['id']] = step
 
             parsed = get_model_action(client, {
                 "level": obs.level,
                 "available_energy": obs.available_energy,
                 "waiting_person": obs.waiting_person,
                 "tasks": obs.tasks,
+                "current_step": obs.current_step,
+                "max_steps": obs.max_steps,
             })
 
             action = PriorityPanicAction(
@@ -197,9 +253,22 @@ async def run_level(client: OpenAI, env, level: str) -> float:
                 message_to_waiting_person=parsed.get("message_to_waiting_person", ""),
                 reasoning=parsed.get("reasoning", ""),
             )
+            
+            # Before stepping, keep track of tasks currently in observation
+            remaining_before = {t['id'] for t in obs.tasks}
 
             result = await env.step(action)
             obs = result.observation
+            
+            # Track completions/removals
+            remaining_after = {t['id'] for t in obs.tasks}
+            completed_or_dropped = remaining_before - remaining_after
+            for tid in completed_or_dropped:
+                if tid in task_spawn_steps:
+                    latency = step - task_spawn_steps[tid] + 1
+                    latencies.append(latency)
+                    # We don't want to recount it if it's somehow re-spawned (unlikely in this env)
+                    del task_spawn_steps[tid]
 
             reward = result.reward or 0.0
             done = result.done
@@ -219,11 +288,12 @@ async def run_level(client: OpenAI, env, level: str) -> float:
             if done:
                 break
 
-        score = rewards[-1] if rewards else 0.0
-        score = min(max(score, 0.0), 1.0)
+        score = sum(rewards)
         success = score >= SUCCESS_SCORE_THRESHOLD
 
     finally:
+        avg_latency = sum(latencies) / len(latencies) if latencies else 0.0
+        print(f"[DEBUG] Level {level} | Average Task Latency: {avg_latency:.2f} steps | Cumulative Reward: {score:.3f}", flush=True)
         log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 
     return score
