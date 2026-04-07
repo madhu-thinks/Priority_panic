@@ -12,19 +12,40 @@ tags:
   - openenv
 ---
 
-# Priority Panic Environment
+## 🧩 Problem Statement
 
-> Inspired by a real situation: two students, four days, no prior experience, and a decision to build anyway.
+AI systems today are highly capable of generating responses but lack the ability to operate in **real-world, dynamic decision-making scenarios**.
+There is no standardized, open environment where AI agents can learn to handle **multi-step workflows involving uncertainty, evolving states, and consequences**.
+
+> Inspired by a real situation — two students, four days, no prior experience, and a decision to build anyway.
 > Every task in this environment is something we personally faced while building it.
-> The agent that learns to handle this learns what we had to learn the hard way.
+> The agent that learns this, learns what we learned the hard way.
 
-An RL environment where an AI agent learns to prioritize tasks under pressure—
-deadlines, dependencies, limited energy, and people waiting.
+---
 
-Three difficulty levels: from simple task ordering to complex, multi-constraint planning.
+## 💡 Solution
 
-This isn’t a toy problem. Every human alive has lived this.
-Now AI can learn it too.
+We introduce **Priority Panic**, a **Reinforcement Learning (RL)-based OpenEnv environment** where AI agents:
+
+* Interact with **dynamic, stateful scenarios**
+* Take **sequential actions** within a defined action space
+* Learn through **verifiable reward functions** based on outcomes
+
+This enables **multi-step decision-making, policy learning, and environment simulation**, shifting AI from passive response generation to **active, real-world decision-making systems**.
+
+---
+
+## 🎯 Difficulty Levels
+
+* 🟢 Simple — basic ordering decisions
+* 🟡 Medium — multi-step workflows
+* 🔴 Complex — multi-constraint planning
+
+---
+
+> This isn’t a toy problem. Every human has lived this.
+> Now AI can learn it too.
+
 
 ## Quick Start
 
