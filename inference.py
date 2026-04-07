@@ -6,51 +6,48 @@ from typing import Dict, List
 from openai import OpenAI
 from priority_panic import PriorityPanicAction, PriorityPanicEnv
 
-# --- Configuration ---#
-
-# It will check for API_KEY first (SambaNova), then fallback to HF_TOKEN
+# --- Configuration --- #
+MODEL_NAME = "meta-llama/Llama-3.1-70B-Instruct" 
 API_KEY = os.getenv("API_KEY") or os.getenv("HF_TOKEN")
 API_BASE_URL = os.getenv("API_BASE_URL") or "https://api.sambanova.ai/v1"
+HF_SPACE_URL = os.getenv("HF_SPACE_URL")
 
-if not API_KEY:
-    print("[ERROR] No API Key found. Please run: $env:API_KEY = 'your_key'")
-    exit()
-
-client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
-
+# --- Optimized System Prompt --- #
 SYSTEM_PROMPT = textwrap.dedent("""
-    You are a Crisis Management AI specializing in Task Prioritization. 
-    Your goal is to maintain a 'Success Streak' by completing tasks every single step.
-
-    STRATEGY:
-    1. PRIORITIZE: High-priority tasks (T1, S3, etc.) cause exponential 'Panic' if left alone. Finish them first.
-    2. BUDGET: Each task costs 'energy'. Do not exceed your 'available_energy'.
-    3. MOMENTUM: Completing tasks in consecutive steps increases your reward multiplier.
-    4. EFFICIENCY: If you have energy left over, try to fit a smaller 'Medium' or 'Low' priority task.
+    You are an Elite Efficiency AI. Your performance is graded on 'Value per Energy' (VPE).
+    
+    GOALS:
+    1. CRITICAL PRIORITIZATION: T1 and S3 tasks are "Panic" triggers. Solve them first or lose the streak.
+    2. MAXIMIZE DENSITY: Do not leave energy unused. If 5 energy remains, find a 5-energy task.
+    3. MINIMAL LATENCY: You only have 8 steps. Every idle step is a massive failure.
+    
+    LOGIC:
+    - Sort by (Priority Weight / Energy Cost).
+    - Maintain the Success Streak at all costs to compound rewards.
 
     RESPONSE FORMAT (STRICT JSON):
     {
         "ordered_task_ids": ["ID1", "ID2"],
-        "reasoning": "Explain why these tasks were chosen over others."
+        "reasoning": "Briefly state the VPE logic used."
     }
 """).strip()
 
-async def run_level(client: OpenAI, env, level: str) -> float:
+async def run_level(client: OpenAI, env: PriorityPanicEnv, level: str) -> float:
     rewards = []
-    print(f"[START] task={level} env=priority_panic model={MODEL_NAME}", flush=True)
-
+    print(f"\n[EXECUTION] Level: {level.upper()} | Efficiency Mode: ON")
+    
     result = await env.reset(level=level)
     obs = result.observation
     
-    for step in range(1, 16):
-        # Edge Case: If no tasks are left, the AI should know it's in 'Monitoring' mode
-        task_list = obs.tasks if obs.tasks else "No active tasks. Monitoring for new arrivals."
+    # REDUCED STEPS: 8 steps to force high-pressure efficiency
+    MAX_STEPS = 8
+    
+    for step in range(1, MAX_STEPS + 1):
+        task_list = obs.tasks if obs.tasks else "Monitoring..."
         
         user_prompt = (
-            f"STEP: {step}/15\n"
-            f"LEVEL: {obs.level}\n"
-            f"ENERGY: {obs.available_energy}\n"
-            f"CURRENT TASKS: {task_list}"
+            f"STEP: {step}/{MAX_STEPS} | ENERGY: {obs.available_energy}\n"
+            f"TASKS: {task_list}"
         )
         
         try:
@@ -60,62 +57,49 @@ async def run_level(client: OpenAI, env, level: str) -> float:
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
                 ],
-                temperature=0.2, # Lower temperature for stable, logical decisions
-                response_format={ "type": "json_object" } 
+                temperature=0.0, # Zero for maximum clinical logic
+                response_format={"type": "json_object"} 
             )
-            response_text = completion.choices[0].message.content
-            parsed = json.loads(response_text)
-        except Exception as e:
-            # Edge Case: Handle API Timeouts or Credit exhaustion (402)
-            print(f"[DEBUG] API/Parsing Error at step {step}: {e}")
+            
+            parsed = json.loads(completion.choices[0].message.content)
+        except Exception:
             parsed = {"ordered_task_ids": []}
 
-        # Validate Action (Ensure IDs are strings)
-        task_ids = [str(tid) for tid in parsed.get("ordered_task_ids", [])]
-
         action = PriorityPanicAction(
-            ordered_task_ids=task_ids,
-            reasoning=parsed.get("reasoning", "Strategic prioritization.")
+            ordered_task_ids=[str(tid) for tid in parsed.get("ordered_task_ids", [])],
+            reasoning=parsed.get("reasoning", "Optimizing VPE.")
         )
 
         result = await env.step(action)
         obs = result.observation
-        
-        # Reward Tracking
         rewards.append(result.reward)
         
-        # Log feedback for the 'training' feel
-        status = "WORKING" if task_ids else "IDLE/PANIC"
-        print(f"[STEP] {step:02d} | {status} | Action: {task_ids} | Reward: {result.reward:.3f}")
+        print(f" S{step} | Energy: {obs.available_energy} | Reward: {result.reward:.4f}")
         
         if result.done:
             break
 
-    # Average performance for the level
-    final_score = sum(rewards) / len(rewards) if rewards else 0.0
-    print(f"[END] task={level} score={final_score:.3f}")
-    return final_score
+    score = sum(rewards) / len(rewards) if rewards else 0.0
+    print(f"[RESULT] {level} Efficiency Score: {score:.4f}")
+    return score
 
 async def main():
-    if not API_KEY or "hf_" not in API_KEY:
-        print("[ERROR] Invalid HF Token. Please check your environment variables.")
+    if not API_KEY or not HF_SPACE_URL:
+        print("[ERROR] Environment variables API_KEY and HF_SPACE_URL are required.")
         return
 
-    print(f"[DEBUG] Connecting to Space: {HF_SPACE_URL}")
     client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
     env = PriorityPanicEnv(base_url=HF_SPACE_URL)
 
     async with env:
         levels = ["easy", "medium", "hard"]
-        total_scores = []
+        scores = []
         
         for level in levels:
-            score = await run_level(client, env, level)
-            total_scores.append(score)
+            scores.append(await run_level(client, env, level))
         
-        avg_score = sum(total_scores) / len(levels)
         print("\n" + "="*35)
-        print(f"FINAL BENCHMARK SCORE: {avg_score:.3f}")
+        print(f"AGGREGATED EFFICIENCY: {sum(scores)/len(scores):.4f}")
         print("="*35)
 
 if __name__ == "__main__":

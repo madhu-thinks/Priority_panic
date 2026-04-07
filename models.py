@@ -3,57 +3,73 @@
 
 """Priority Panic Environment Models — India AI Hackathon '26 Edition."""
 
-from typing import List, Dict, Optional
+from typing import List, Dict, Any, Optional
 from pydantic import Field, ConfigDict
 from openenv.core.env_server.types import Action, Observation
 
 class PriorityPanicObservation(Observation):
-    """What the agent sees — a pile of tasks and constraints."""
+    """
+    The state of the world as seen by the Agent.
+    Contains tasks, resource constraints, and environmental context.
+    """
     
-    tasks: List[Dict] = Field(
+    tasks: List[Dict[str, Any]] = Field(
         default_factory=list, 
-        description="List of tasks to prioritize (id, name, energy, deadline)"
+        description="Active tasks: Includes 'id', 'priority', 'energy', and 'age'."
     )
     available_energy: int = Field(
         default=5, 
-        description="Total energy the agent has for this step"
+        description="Total energy units available to spend this step."
     )
     waiting_person: str = Field(
         default="", 
-        description="Name of the person waiting for a status update"
+        description="Contextual stakeholder waiting for a status update."
     )
     level: str = Field(
         default="easy", 
-        description="Difficulty: easy (5 steps), medium (10 steps), or hard (15 steps)"
+        description="Current difficulty setting (Easy, Medium, or Hard)."
     )
     
-    # Required for OpenEnv compatibility
-    done: bool = Field(default=False)
-    reward: float = Field(default=0.0)
-    metadata: Optional[Dict] = Field(default_factory=dict)
+    # Required for OpenEnv / Reinforcement Learning compatibility
+    done: bool = Field(
+        default=False, 
+        description="Flag indicating if the 9-step episode has concluded."
+    )
+    reward: float = Field(
+        default=0.0, 
+        description="The immediate scalar reward from the previous step (0.0 to 1.0)."
+    )
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict, 
+        description="Additional debugging or environment-specific data."
+    )
 
-    # This prevents the "Extra inputs are not permitted" crash
+    # CRITICAL: Prevents Pydantic from crashing if the server sends unexpected fields.
     model_config = ConfigDict(extra='ignore')
 
 
 class PriorityPanicAction(Action):
-    """What the agent decides to do in response to the pressure."""
+    """
+    The decision made by the Agent.
+    Dictates task processing and communication strategy.
+    """
     
     ordered_task_ids: List[str] = Field(
         default_factory=list, 
-        description="Task IDs in priority order to be processed"
+        description="IDs of tasks to execute this step, in order of execution."
     )
     dropped_task_ids: List[str] = Field(
         default_factory=list, 
-        description="Tasks the agent explicitly chooses to abandon"
+        description="IDs of tasks the agent is explicitly ignoring to save energy."
     )
     message_to_waiting_person: str = Field(
         default="", 
-        description="Optional status update message"
+        description="A natural language status update for the stakeholder."
     )
     reasoning: str = Field(
         default="", 
-        description="The agent's internal logic for the hackathon judges"
+        description="The clinical logic/VPE math justifying this specific action."
     )
 
+    # CRITICAL: Ensures compatibility with varying server payload structures.
     model_config = ConfigDict(extra='ignore')

@@ -1,135 +1,117 @@
 import math
 from uuid import uuid4
-from openenv.core.env_server.interfaces import Environment
-from openenv.core.env_server.types import State
+# Assuming these interfaces exist in your openenv setup
+# from openenv.core.env_server.interfaces import Environment
+# from openenv.core.env_server.types import State
 
-try:
-    from ..models import PriorityPanicAction, PriorityPanicObservation
-except ImportError:
-    from models import PriorityPanicAction, PriorityPanicObservation
-
-class PriorityPanicEnvironment(Environment):
+class PriorityPanicEnvironment: # Inherit from Environment as per your setup
     SUPPORTS_CONCURRENT_SESSIONS: bool = True
-    MAX_STEPS = 15 
+    MAX_STEPS = 9  # Reduced as per our efficiency optimization
 
     def __init__(self):
-        self._state = State(episode_id=str(uuid4()), step_count=0)
-        self._current_tasks = []
-        self._level = "easy"
-        self._available_energy = 5
-        self._streak = 0  # New: Tracks consecutive successful steps
-        self._cumulative_reward = 0.0
+        self._reset_internal()
+
+    def _reset_internal(self, level="easy"):
+        self.step_count = 0
+        self._level = level
+        self._available_energy = 5 if level == "easy" else 7
+        self._current_tasks = self._get_base_tasks(level)
+        self._streak = 0
+        self._prev_step_reward = 0.0  # Track last reward to enforce improvement
 
     def _get_base_tasks(self, level: str):
         loadouts = {
             "easy": [
-                {"id": "T1", "name": "Submit assignment", "priority": "high", "energy": 2, "age": 0},
-                {"id": "T3", "name": "Eat lunch", "priority": "high", "energy": 1, "age": 0},
-                {"id": "T5", "name": "Read extra chapter", "priority": "medium", "energy": 2, "age": 0},
+                {"id": "T1", "priority": "high", "energy": 2, "age": 0},
+                {"id": "T3", "priority": "high", "energy": 1, "age": 0},
+                {"id": "T5", "priority": "medium", "energy": 2, "age": 0},
             ],
             "medium": [
-                {"id": "T1", "name": "Fix critical bug", "priority": "high", "energy": 3, "age": 0},
-                {"id": "T2", "name": "Attend team meeting", "priority": "high", "energy": 1, "age": 0},
-                {"id": "T8", "name": "Update Documentation", "priority": "low", "energy": 2, "age": 0},
+                {"id": "T1", "priority": "high", "energy": 3, "age": 0},
+                {"id": "T2", "priority": "high", "energy": 2, "age": 0},
+                {"id": "T8", "priority": "low", "energy": 2, "age": 0},
             ],
             "hard": [
-                {"id": "T1", "name": "Hackathon Final Push", "priority": "high", "energy": 4, "age": 0},
-                {"id": "T6", "name": "Server Migration", "priority": "high", "energy": 3, "age": 0},
+                {"id": "T1", "priority": "high", "energy": 4, "age": 0},
+                {"id": "T6", "priority": "high", "energy": 3, "age": 0},
+                {"id": "S0", "priority": "high", "energy": 2, "age": 0},
             ]
         }
         return loadouts.get(level, loadouts["easy"])
 
-    def step(self, action: PriorityPanicAction) -> PriorityPanicObservation:
-        self._state.step_count += 1
-        
-        # Edge Case: Handle empty or null action
-        ids_to_process = action.ordered_task_ids if action.ordered_task_ids else []
+    def step(self, action):
+        self.step_count += 1
+        ids_to_process = action.ordered_task_ids or []
         
         energy_used = 0
         completed_ids = []
         
-        # Process Actions with Energy Validation
+        # 1. Energy Validation Logic
         for tid in ids_to_process:
             task = next((t for t in self._current_tasks if t["id"] == tid), None)
-            if task:
-                if energy_used + task["energy"] <= self._available_energy:
-                    energy_used += task["energy"]
-                    completed_ids.append(tid)
-                # Edge Case: If energy exceeded, we skip this task but continue 
-                # checking others (in case a smaller task fits).
+            if task and (energy_used + task["energy"] <= self._available_energy):
+                energy_used += task["energy"]
+                completed_ids.append(tid)
 
-        # Reward Logic with Momentum
-        step_reward = self._calculate_reward(completed_ids)
-        self._cumulative_reward += step_reward
-        
-        # Update Streak
+        # 2. Update State
         if len(completed_ids) > 0:
             self._streak += 1
         else:
-            self._streak = 0 # Reset streak if no work done
+            self._streak = 0
 
-        # Remove completed and update age
+        # Remove completed and age the rest
         self._current_tasks = [t for t in self._current_tasks if t["id"] not in completed_ids]
         for t in self._current_tasks:
             t["age"] += 1
 
-        # Periodic Task Injection (Keeps the AI busy)
-        if self._state.step_count in [3, 7, 12]:
+        # 3. Dynamic Task Injection (High Pressure)
+        if self.step_count in [2, 5]: # Inject sooner for a 9-step limit
             self._current_tasks.append({
-                "id": f"S{self._state.step_count}", 
-                "name": "Incoming Request", 
-                "priority": "high" if self._level != "easy" else "medium",
-                "energy": 2, "age": 0
+                "id": f"S{self.step_count}", 
+                "priority": "high",
+                "energy": 3, "age": 0
             })
 
-        done = self._state.step_count >= self.MAX_STEPS
+        # 4. REWARD CALCULATION (The "Push" Logic)
+        step_reward = self._calculate_reward(completed_ids)
+        
+        # ENFORCED IMPROVEMENT: Small bonus if current reward > previous reward
+        if step_reward > self._prev_step_reward:
+            step_reward += 0.05 
+        elif step_reward < self._prev_step_reward and step_reward > 0:
+            step_reward -= 0.02 # Slight "Momentum Loss" penalty
+            
+        self._prev_step_reward = step_reward
+        
+        done = self.step_count >= self.MAX_STEPS or (not self._current_tasks and self.step_count > 5)
+        
         return self._get_observation(reward=step_reward, done=done)
 
     def _calculate_reward(self, completed_ids) -> float:
         """
-        ADVANCED REWARD SHAPING:
-        1. Accomplishment (Base): 0.3 per task.
-        2. Momentum Bonus: Adds 10% extra reward for every step in a streak.
-        3. Panic Penalty: Linear (not exponential) so AI can still recover.
+        SHARP REWARD SHAPING:
+        - High Penalty for High Priority aging.
+        - Higher weight for finishing tasks.
+        - Removed the +2.0 offset to make 0.0 actually feel like a failure.
         """
         if not completed_ids and not self._current_tasks:
-            return 0.1 # Idle reward if everything is done (Peace of mind)
+            return 0.5 # Maintenance reward
 
-        # 1. Base Utility
-        base_gain = len(completed_ids) * 0.3
+        # Base Gain: 0.4 per task (Stronger signal)
+        gain = len(completed_ids) * 0.4
         
-        # 2. Streak/Momentum Multiplier (Max 1.5x)
-        multiplier = min(1.5, 1.0 + (self._streak * 0.1))
-        adjusted_gain = base_gain * multiplier
+        # Streak bonus (Exponential to push for long streaks)
+        streak_bonus = (self._streak ** 2) * 0.02 
         
-        # 3. Penalty Logic (Edge Case: Penalty shouldn't exceed Gain)
+        # Panic Penalty (Exponential aging penalty)
         penalty = 0.0
         for t in self._current_tasks:
-            # High priority aging is the main threat
-            p = 0.05 + (0.02 * t["age"])
-            if t["priority"] == "high": p *= 2
-            penalty += p
+            # Exponentially increase penalty as high-priority tasks age
+            p_multiplier = 2.0 if t["priority"] == "high" else 1.0
+            penalty += (0.1 * (t["age"] ** 1.5)) * p_multiplier
 
-        # 4. Final Normalization for Meta (0.0 - 1.0)
-        # We divide by 10 to ensure 9.1 raw becomes 0.91
-        raw_score = (adjusted_gain - penalty)
-        return max(0.0, min(1.0, (raw_score + 2.0) / 10.0)) # Offset by +2 to avoid 0.0 early on
-
-    def _get_observation(self, reward: float, done: bool) -> PriorityPanicObservation:
-        return PriorityPanicObservation(
-            tasks=self._current_tasks,
-            available_energy=self._available_energy,
-            level=self._level,
-            done=done,
-            reward=reward,
-        )
-
-    @property
-    def state(self) -> State: return self._state
-    def reset(self, level: str = "easy"):
-        self._state = State(episode_id=str(uuid4()), step_count=0)
-        self._level = level
-        self._available_energy = 5 if level == "easy" else 6
-        self._current_tasks = self._get_base_tasks(level)
-        self._streak = 0
-        return self._get_observation(reward=0.0, done=False)
+        # Final score calculation without the "softening" offset
+        raw_score = gain + streak_bonus - penalty
+        
+        # Clamp between 0 and 1.0
+        return max(0.0, min(1.0, raw_score))
