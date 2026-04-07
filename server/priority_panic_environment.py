@@ -1,5 +1,8 @@
 import sys
 import os
+import json
+import textwrap
+import httpx
 from typing import List, Dict, Any, Optional
 
 # Add parent directory to path to find models.py if running from server/
@@ -12,17 +15,22 @@ from openenv.core.env_server.types import State
 
 class PriorityPanicEnvironment(Environment):
     SUPPORTS_CONCURRENT_SESSIONS: bool = True
-    MAX_STEPS = 9
+    MAX_STEPS = 15
 
     def __init__(self):
         import uuid # Move here as it was removed from top
         self._uuid_lib = uuid
         self._episode_id = str(uuid.uuid4())
+        self._action_history = []
+        self._state_history = []
+        self._current_grader_feedback = "Initial step."
         self._reset_internal()
 
     def reset(self, level: str = "easy", **kwargs) -> PriorityPanicObservation:
         """Initialize the environment for a new episode."""
         self._episode_id = str(self._uuid_lib.uuid4())
+        self._action_history = []
+        self._state_history = []
         self._reset_internal(level=level)
         return self._get_observation()
 
@@ -73,7 +81,89 @@ class PriorityPanicEnvironment(Environment):
 
     async def step_async(self, action: PriorityPanicAction, **kwargs) -> PriorityPanicObservation:
         """Required for OpenEnv WebSocket server compatibility."""
-        return self.step(action, **kwargs)
+        # 1. Execute the step logic (sync)
+        obs = self.step(action, **kwargs)
+        
+        # 2. Record history for the grader
+        self._action_history.append(action.dict())
+        self._state_history.append(obs.dict())
+        
+        # 3. Periodic Grader (Modulo 3)
+        if self.step_count > 0 and self.step_count % 3 == 0:
+            await self._run_llm_grader()
+            # The next observation will carry the new reward and feedback
+            obs.reward = self._prev_step_reward
+            obs.metadata["grader_feedback"] = self._current_grader_feedback
+            
+        return obs
+
+    async def _run_llm_grader(self):
+        """Calls Qwen2.5 to evaluate the recent 3 steps against the rubric."""
+        hf_token = os.getenv("HF_TOKEN")
+        if not hf_token:
+            self._current_grader_feedback = "Grader offline: No HF_TOKEN."
+            return
+
+        # Prepare context (last 3 steps)
+        history_window = {
+            "states": self._state_history[-3:],
+            "actions": self._action_history[-3:]
+        }
+        
+        prompt = self._get_grader_prompt(history_window)
+        
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.post(
+                    "https://router.huggingface.co/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {hf_token}"},
+                    json={
+                        "model": "Qwen/Qwen2.5-7B-Instruct",
+                        "messages": [
+                            {"role": "system", "content": "You are an Elite AI Grader for the Priority Panic RL environment."},
+                            {"role": "user", "content": prompt}
+                        ],
+                        "response_format": {"type": "json_object"},
+                        "temperature": 0.1
+                    }
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    result = json.loads(data["choices"][0]["message"]["content"])
+                    
+                    # Compute rubric-based reward: (Decision + Efficiency + Impact) / 3
+                    d = float(result.get("decision", 0.5))
+                    e = float(result.get("efficiency", 0.5))
+                    i = float(result.get("impact", 0.5))
+                    
+                    self._prev_step_reward = max(0.01, min(1.0, (d + e + i) / 3.0))
+                    self._current_grader_feedback = result.get("reasoning", "Evaluated by Qwen.")
+                else:
+                    self._current_grader_feedback = f"Grader error: API returned {response.status_code}"
+        except Exception as e:
+            self._current_grader_feedback = f"Grader Exception: {str(e)}"
+
+    def _get_grader_prompt(self, window: dict) -> str:
+        return textwrap.dedent(f"""
+            Analyze the following 3 steps of a Priority Panic agent's trajectory.
+            
+            HISTORY DATA:
+            {json.dumps(window, indent=2)}
+            
+            RUBRIC (Score each 0.0 to 1.0):
+            1. Decision Quality: Did the agent prioritize 'high' and 'panic' tasks correctly?
+            2. Efficiency: Did the agent maximize energy usage per step?
+            3. Impact: Did the agent reduce system stress (panic tasks) and maintain social debt?
+            
+            Return ONLY a JSON object:
+            {{
+                "decision": float,
+                "efficiency": float,
+                "impact": float,
+                "reasoning": "string (brief justification)"
+            }}
+        """).strip()
 
     def _step_internal(self, action: PriorityPanicAction) -> PriorityPanicObservation:
         ids_to_process = action.ordered_task_ids or []

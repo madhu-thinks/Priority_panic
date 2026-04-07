@@ -53,13 +53,16 @@ Captured via `PriorityPanicAction`.
 
 ---
 
-## 🎯 Reward Function: Granular Progress Signal
+## 🧠 Intelligent Grader (LLM-as-a-Judge)
+Priority Panic V2 introduces a sophisticated **Reinforcement Learning-based reward mechanism** combined with an **LLM-as-a-Judge** approach.
 
-The grader provides a `0.0–1.0` reward per step to incentivize long-term planning:
-1. **Completion Gain**: `+0.30` per completed task.
-2. **Partial Progress**: `+0.05` per unit of energy efficiently utilized.
-3. **Panic Penalty**: `-(0.1 * age^1.5)` per task left aging.
-4. **Social Penalty**: `-(0.1 * social_debt)` if the agent fails to communicate with a waiting stakeholder.
+- **Periodic Grading**: Every 3 steps, the environment calls **Qwen2.5-7B-Instruct** to evaluate the agent's recent trajectory.
+- **Multidimensional Rubric**: The grader evaluates:
+    - **Decision Quality**: Was prioritization correct? (Score 0-1)
+    - **Efficiency**: Was energy usage maximized per step? (Score 0-1)
+    - **Impact**: Was system stress (panic) and social debt reduced? (Score 0-1)
+- **Continuous Reward Signal**: Between grading steps, a rule-based system provides partial rewards (+0.05 per energy unit) to maintain a dense learning signal.
+- **Long-Horizon Trajectories (15 Steps)**: Increased episode length ensures agents must plan for future task aging and dynamic spawns.
 
 ---
 
