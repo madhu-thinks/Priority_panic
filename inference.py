@@ -8,10 +8,10 @@ from openai import OpenAI
 from priority_panic import PriorityPanicAction, PriorityPanicEnv
 
 # --- Configuration --- #
-MODEL_NAME = "Qwen2.5-7B-Instruct"
+MODEL_NAME = os.getenv("MODEL_NAME") or "Qwen/Qwen2.5-7B-Instruct"
 API_KEY = os.getenv("HF_TOKEN")
 API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
-HF_SPACE_URL = os.getenv("HF_SPACE_URL") or "https://your-username-priority-panic.hf.space"
+HF_SPACE_URL = os.getenv("HF_SPACE_URL") or "https://madhubuilds-priority-panic.hf.space"
 # --- DEBUG PRINT (Add this temporarily to see what's happening) ---
 if not API_KEY:
     print("[DEBUG] HF_TOKEN is missing from .env or .env is not found!")
@@ -39,13 +39,15 @@ SYSTEM_PROMPT = textwrap.dedent("""
 
 async def run_level(client: OpenAI, env: PriorityPanicEnv, level: str) -> float:
     rewards = []
-    print(f"\n[EXECUTION] Level: {level.upper()} | Efficiency Mode: ON")
+    
+    # [MANDATORY] Start logging
+    print(f"[START] task={level} env=priority_panic model={MODEL_NAME}", flush=True)
     
     result = await env.reset(level=level)
     obs = result.observation
     
-    # REDUCED STEPS: 8 steps to force high-pressure efficiency
     MAX_STEPS = 8
+    success = False
     
     for step in range(1, MAX_STEPS + 1):
         task_list = obs.tasks if obs.tasks else "Monitoring..."
@@ -55,6 +57,8 @@ async def run_level(client: OpenAI, env: PriorityPanicEnv, level: str) -> float:
             f"TASKS: {task_list}"
         )
         
+        error_msg = "null"
+        action_str = "None"
         try:
             completion = client.chat.completions.create(
                 model=MODEL_NAME,
@@ -62,30 +66,38 @@ async def run_level(client: OpenAI, env: PriorityPanicEnv, level: str) -> float:
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
                 ],
-                temperature=0.0, # Zero for maximum clinical logic
+                temperature=0.0, 
                 response_format={"type": "json_object"} 
             )
             
             parsed = json.loads(completion.choices[0].message.content)
-        except Exception:
-            parsed = {"ordered_task_ids": []}
-
-        action = PriorityPanicAction(
-            ordered_task_ids=[str(tid) for tid in parsed.get("ordered_task_ids", [])],
-            reasoning=parsed.get("reasoning", "Optimizing VPE.")
-        )
+            ordered_ids = [str(tid) for tid in parsed.get("ordered_task_ids", [])]
+            action_str = f"process({ordered_ids})"
+            
+            action = PriorityPanicAction(
+                ordered_task_ids=ordered_ids,
+                reasoning=parsed.get("reasoning", "Optimizing VPE.")
+            )
+        except Exception as e:
+            error_msg = str(e)
+            action = PriorityPanicAction(ordered_task_ids=[], reasoning="Error fallback.")
 
         result = await env.step(action)
         obs = result.observation
         rewards.append(result.reward)
         
-        print(f" S{step} | Energy: {obs.available_energy} | Reward: {result.reward:.4f}")
+        # [MANDATORY] Step logging
+        print(f"[STEP] step={step} action={action_str} reward={result.reward:.2f} done={str(result.done).lower()} error={error_msg}", flush=True)
         
         if result.done:
+            success = True
             break
 
+    # [MANDATORY] End logging
+    rewards_str = ",".join([f"{r:.2f}" for r in rewards])
     score = sum(rewards) / len(rewards) if rewards else 0.0
-    print(f"[RESULT] {level} Efficiency Score: {score:.4f}")
+    print(f"[END] success={str(success).lower()} steps={len(rewards)} score={score:.2f} rewards={rewards_str}", flush=True)
+    
     return score
 
 async def main():

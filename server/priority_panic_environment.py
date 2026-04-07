@@ -1,15 +1,41 @@
-import math
-from uuid import uuid4
-# Assuming these interfaces exist in your openenv setup
-# from openenv.core.env_server.interfaces import Environment
-# from openenv.core.env_server.types import State
+import sys
+import os
+from typing import List, Dict, Any, Optional
 
-class PriorityPanicEnvironment: # Inherit from Environment as per your setup
+# Add parent directory to path to find models.py if running from server/
+# This ensures "from models import ..." always works
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from models import PriorityPanicObservation, PriorityPanicAction
+from openenv.core.env_server.interfaces import Environment
+from openenv.core.env_server.types import State
+
+class PriorityPanicEnvironment(Environment):
     SUPPORTS_CONCURRENT_SESSIONS: bool = True
-    MAX_STEPS = 9  # Reduced as per our efficiency optimization
+    MAX_STEPS = 9
 
     def __init__(self):
+        import uuid # Move here as it was removed from top
+        self._uuid_lib = uuid
+        self._episode_id = str(uuid.uuid4())
         self._reset_internal()
+
+    def reset(self, level: str = "easy", **kwargs) -> PriorityPanicObservation:
+        """Initialize the environment for a new episode."""
+        self._episode_id = str(self._uuid_lib.uuid4())
+        self._reset_internal(level=level)
+        return self._get_observation()
+
+    async def reset_async(self, **kwargs) -> PriorityPanicObservation:
+        """Required for OpenEnv WebSocket server compatibility."""
+        return self.reset(**kwargs)
+
+    def state(self) -> State:
+        """Return the current episode state."""
+        return State(
+            episode_id=self._episode_id,
+            step_count=self.step_count,
+        )
 
     def _reset_internal(self, level="easy"):
         self.step_count = 0
@@ -17,7 +43,8 @@ class PriorityPanicEnvironment: # Inherit from Environment as per your setup
         self._available_energy = 5 if level == "easy" else 7
         self._current_tasks = self._get_base_tasks(level)
         self._streak = 0
-        self._prev_step_reward = 0.0  # Track last reward to enforce improvement
+        self._prev_step_reward = 0.0
+        self._social_debt = 0.0  # New: Tracks annoyance of stakeholders
 
     def _get_base_tasks(self, level: str):
         loadouts = {
@@ -39,8 +66,16 @@ class PriorityPanicEnvironment: # Inherit from Environment as per your setup
         }
         return loadouts.get(level, loadouts["easy"])
 
-    def step(self, action):
+    def step(self, action: PriorityPanicAction, **kwargs) -> PriorityPanicObservation:
+        """Execute one step in the environment."""
         self.step_count += 1
+        return self._step_internal(action)
+
+    async def step_async(self, action: PriorityPanicAction, **kwargs) -> PriorityPanicObservation:
+        """Required for OpenEnv WebSocket server compatibility."""
+        return self.step(action, **kwargs)
+
+    def _step_internal(self, action: PriorityPanicAction) -> PriorityPanicObservation:
         ids_to_process = action.ordered_task_ids or []
         
         energy_used = 0
@@ -64,16 +99,25 @@ class PriorityPanicEnvironment: # Inherit from Environment as per your setup
         for t in self._current_tasks:
             t["age"] += 1
 
-        # 3. Dynamic Task Injection (High Pressure)
-        if self.step_count in [2, 5]: # Inject sooner for a 9-step limit
+        # 3. Social Logic (Stakeholder Interaction)
+        message = getattr(action, "message_to_waiting_person", "")
+        if not message or len(str(message)) < 10:
+            self._social_debt += 0.15  # Stakeholder gets annoyed by silence
+        else:
+            self._social_debt = max(0, self._social_debt - 0.1) # Stakeholder satisfied
+
+        # 4. Dynamic Task Injection (High Pressure)
+        # In Hard mode, inject tasks even faster
+        injection_steps = [2, 4, 6] if self._level == "hard" else [2, 5]
+        if self.step_count in injection_steps:
             self._current_tasks.append({
                 "id": f"S{self.step_count}", 
-                "priority": "high",
+                "priority": "high" if self._level != "easy" else "medium",
                 "energy": 3, "age": 0
             })
 
-        # 4. REWARD CALCULATION (The "Push" Logic)
-        step_reward = self._calculate_reward(completed_ids)
+        # 5. REWARD CALCULATION (The "Push" Logic)
+        step_reward = self._calculate_reward(completed_ids, energy_used)
         
         # ENFORCED IMPROVEMENT: Small bonus if current reward > previous reward
         if step_reward > self._prev_step_reward:
@@ -87,31 +131,46 @@ class PriorityPanicEnvironment: # Inherit from Environment as per your setup
         
         return self._get_observation(reward=step_reward, done=done)
 
-    def _calculate_reward(self, completed_ids) -> float:
+    def _get_observation(self, reward: float = 0.0, done: bool = False) -> PriorityPanicObservation:
+        """Constructs an observation object based on internal state."""
+        return PriorityPanicObservation(
+            tasks=self._current_tasks,
+            available_energy=self._available_energy,
+            waiting_person="Mentor" if self.step_count > 4 else "Colleague",
+            level=self._level,
+            done=done,
+            reward=reward,
+            metadata={"streak": self._streak}
+        )
+
+    def _calculate_reward(self, completed_ids, energy_used: int) -> float:
         """
-        SHARP REWARD SHAPING:
-        - High Penalty for High Priority aging.
-        - Higher weight for finishing tasks.
-        - Removed the +2.0 offset to make 0.0 actually feel like a failure.
+        SHARP REWARD SHAPING (Hackathon Optimized):
+        - Partial Progress: Gain based on energy units spent (0.05 / unit).
+        - Completion Gain: 0.3 per task.
+        - Social Penalty: -0.1 per unit of social debt.
+        - Panic Penalty: Exponential aging penalty.
         """
         if not completed_ids and not self._current_tasks:
             return 0.5 # Maintenance reward
 
-        # Base Gain: 0.4 per task (Stronger signal)
-        gain = len(completed_ids) * 0.4
+        # 1. Partial Progress & Completion
+        gain = (len(completed_ids) * 0.3) + (energy_used * 0.05)
         
-        # Streak bonus (Exponential to push for long streaks)
+        # 2. Streak bonus
         streak_bonus = (self._streak ** 2) * 0.02 
         
-        # Panic Penalty (Exponential aging penalty)
-        penalty = 0.0
+        # 3. Panic Penalty (Aging)
+        panic_penalty = 0.0
         for t in self._current_tasks:
-            # Exponentially increase penalty as high-priority tasks age
             p_multiplier = 2.0 if t["priority"] == "high" else 1.0
-            penalty += (0.1 * (t["age"] ** 1.5)) * p_multiplier
+            panic_penalty += (0.1 * (t["age"] ** 1.5)) * p_multiplier
 
-        # Final score calculation without the "softening" offset
-        raw_score = gain + streak_bonus - penalty
+        # 4. Social Penalty
+        social_penalty = self._social_debt * 0.1
+
+        # Final score calculation
+        raw_score = gain + streak_bonus - panic_penalty - social_penalty
         
         # Clamp between 0 and 1.0
         return max(0.0, min(1.0, raw_score))
