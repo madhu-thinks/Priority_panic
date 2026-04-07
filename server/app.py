@@ -31,21 +31,22 @@ Usage:
 import os
 import sys
 
-# Standardize pathing so imports work whether running from root or server/
+# Standardize pathing: This ensures the 'server' and 'models' folders are visible
+# no matter where the command is run from.
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
     from openenv.core.env_server.http_server import create_app
 except Exception as e:
     raise ImportError(
-        "openenv is required for the web interface. Install dependencies with 'uv sync'"
+        "openenv is required. Install with 'pip install openenv-core' or 'uv sync'"
     ) from e
 
-# Cleaned up imports to avoid redundancy
+# Robust imports: Handles both local execution and Docker/HF Spaces
 try:
     from models import PriorityPanicAction, PriorityPanicObservation
     from server.priority_panic_environment import PriorityPanicEnvironment
-except ImportError:
+except (ImportError, ModuleNotFoundError):
     from ..models import PriorityPanicAction, PriorityPanicObservation
     from .priority_panic_environment import PriorityPanicEnvironment
 
@@ -58,21 +59,14 @@ app = create_app(
     max_concurrent_envs=1,
 )
 
-def main(host: str = "0.0.0.0", port: int = 7860):
+def main():
     """
-    Entry point for direct execution. 
-    Note: Port 7860 is required for Hugging Face Spaces compatibility.
+    Standard entry point for openenv validate.
+    This must be callable with ZERO arguments.
     """
     import uvicorn
-    # Use string reference to allow for better worker management
-    uvicorn.run("server.app:app", host=host, port=port, reload=False)
+    # Port 7860 is the required standard for Hugging Face Spaces
+    uvicorn.run(app, host="0.0.0.0", port=7860)
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser()
-    # Defaulting to 7860 for HF/OpenEnv compatibility
-    parser.add_argument("--host", type=str, default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=7860)
-    args = parser.parse_args()
-    
-    main(host=args.host, port=args.port)
+    main()
