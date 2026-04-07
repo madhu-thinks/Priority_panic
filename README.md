@@ -12,8 +12,6 @@ tags:
   - openenv
 ---
 
-## 🧩 Problem Statement
-
 AI systems today are highly capable of generating responses but lack the ability to operate in **real-world, dynamic decision-making scenarios**.
 There is no standardized, open environment where AI agents can learn to handle **multi-step workflows involving uncertainty, evolving states, and consequences**.
 
@@ -23,9 +21,7 @@ There is no standardized, open environment where AI agents can learn to handle *
 
 ---
 
-## 💡 Solution
-
-We introduce **Priority Panic**, a **Reinforcement Learning (RL)-based OpenEnv environment** where AI agents:
+**Priority Panic**, An **Reinforcement Learning (RL)-based OpenEnv environment** where AI agents:
 
 * Interact with **dynamic, stateful scenarios**
 * Take **sequential actions** within a defined action space
