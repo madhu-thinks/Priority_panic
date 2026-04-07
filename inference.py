@@ -7,16 +7,14 @@ from openai import OpenAI
 from priority_panic import PriorityPanicAction, PriorityPanicEnv
 
 # --- Configuration ---
-# Standardizing token retrieval
-API_KEY = (
-    os.getenv("HF_TOKEN") or 
-    os.getenv("HF_TOKEN_1")
-)
 HF_SPACE_URL = os.getenv("HF_SPACE_URL") or "https://madhubuilds-priority-panic.hf.space"
-API_BASE_URL = "https://router.huggingface.co/v1"
 
-# Using a more efficient model to avoid 402 Credit errors while maintaining high logic
-MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct" 
+# Using SambaNova for high-speed, free-tier inference
+API_BASE_URL = "https://api.sambanova.ai/v1"
+API_KEY = "12d928b2-7032-44e4-9062-0c73579c63dd" 
+
+# Llama 3.3 70B is elite for reasoning tasks!
+MODEL_NAME = "Meta-Llama-3.3-70B-Instruct"
 
 SYSTEM_PROMPT = textwrap.dedent("""
     You are a Crisis Management AI specializing in Task Prioritization. 
