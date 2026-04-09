@@ -52,7 +52,7 @@ class PriorityPanicEnvironment(Environment):
         self._current_tasks = self._get_base_tasks(level)
         self._streak = 0
         self._prev_step_reward = 0.0
-        self._social_debt = 0.0  # New: Tracks annoyance of stakeholders
+        self._social_debt = 0.0  # Tracks annoyance of stakeholders
 
     def _get_base_tasks(self, level: str):
         loadouts = {
@@ -209,11 +209,11 @@ class PriorityPanicEnvironment(Environment):
         # 5. REWARD CALCULATION (The "Push" Logic)
         step_reward = self._calculate_reward(completed_ids, energy_used)
         
-        # ENFORCED IMPROVEMENT: Small bonus if current reward > previous reward
+        #  if current reward > previous reward
         if step_reward > self._prev_step_reward:
             step_reward += 0.05 
         elif step_reward < self._prev_step_reward and step_reward > 0:
-            step_reward -= 0.02 # Slight "Momentum Loss" penalty
+            step_reward -= 0.02 # "Momentum Loss" penalty
             
         self._prev_step_reward = step_reward
         

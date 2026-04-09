@@ -12,7 +12,7 @@ MODEL_NAME = os.getenv("MODEL_NAME") or "Qwen/Qwen2.5-7B-Instruct"
 API_KEY = os.getenv("HF_TOKEN")
 API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
 HF_SPACE_URL = os.getenv("HF_SPACE_URL") or "https://madhubuilds-priority-panic.hf.space"
-# --- DEBUG PRINT (Add this temporarily to see what's happening) ---
+# --- DEBUG PRINT (Added this temporarily to see what's happening) ---
 if not API_KEY:
     print("[DEBUG] HF_TOKEN is missing from .env or .env is not found!")
 if not HF_SPACE_URL:
@@ -41,7 +41,7 @@ SYSTEM_PROMPT = textwrap.dedent("""
 async def run_level(client: OpenAI, env: PriorityPanicEnv, level: str) -> float:
     rewards = []
     
-    # [MANDATORY] Start logging
+    # Start logging
     print(f"[START] task={level} env=priority_panic model={MODEL_NAME}", flush=True)
     
     result = await env.reset(level=level)
@@ -104,14 +104,14 @@ async def run_level(client: OpenAI, env: PriorityPanicEnv, level: str) -> float:
         obs = result.observation
         rewards.append(result.reward)
         
-        # [MANDATORY] Step logging
+        #  Step logging
         print(f"[STEP] step={step} action={action_str} reward={result.reward:.2f} done={str(result.done).lower()} error={error_msg}", flush=True)
         
         if result.done:
             success = True
             break
 
-    # [MANDATORY] End logging
+    # End logging
     rewards_str = ",".join([f"{r:.2f}" for r in rewards])
     score = sum(rewards) / len(rewards) if rewards else 0.0
     print(f"[END] success={str(success).lower()} steps={len(rewards)} score={score:.2f} rewards={rewards_str}", flush=True)

@@ -30,7 +30,7 @@ class PriorityPanicObservation(Observation):
         description="Current difficulty setting (Easy, Medium, or Hard)."
     )
     
-    # Required for OpenEnv / Reinforcement Learning compatibility
+    # Required for OpenEnv 
     done: bool = Field(
         default=False, 
         description="Flag indicating if the 9-step episode has concluded."
